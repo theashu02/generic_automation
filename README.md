@@ -76,7 +76,8 @@ python main.py --url "URL" \
 | `--som`       | `-s`  | Enable Set-of-Mark mode                |
 | `--headless`  | `-h`  | Run without visible browser            |
 | `--max-steps` | `-m`  | Max automation steps (default: 30)     |
-| `--delay`     |       | Seconds between actions (default: 2.0) |
+| `--delay`     |       | Seconds between actions (default: 1.0) |
+| `--yes`       | `-y`  | Skip the start confirmation prompt     |
 
 ## 🔧 How It Works
 

@@ -152,6 +152,112 @@ class VisionAgent:
         elif self.cover_letter_path:
             console.print(f"[yellow]⚠ Cover letter not found: {self.cover_letter_path}[/yellow]")
     
+    def _dismiss_popups(self, page: Page):
+        """
+        Try to dismiss common cookie/privacy popups that block the form.
+        """
+        blockers = [
+            "Accept", "Agree", "Accept All", "Allow all", "Continue", "Got it", "OK", "Close", "Dismiss"
+        ]
+        for label in blockers:
+            locators = [
+                page.get_by_role("button", name=label, exact=False),
+                page.get_by_text(label, exact=False)
+            ]
+            for locator in locators:
+                try:
+                    if locator.count() > 0 and locator.first.is_visible():
+                        locator.first.click(force=True)
+                        time.sleep(0.2)
+                        break
+                except Exception:
+                    continue
+    
+    def _prefill_obvious_fields(self, page: Page) -> int:
+        """
+        Deterministically fill common fields using user data to reduce GPT calls.
+        
+        Returns:
+            Number of fields successfully prefilled
+        """
+        personal = self.user_data.get('personal_info', {})
+        address = personal.get('address', {})
+        links = self.user_data.get('professional_links', {})
+        prefs = self.user_data.get('preferences', {})
+        work_experience = self.user_data.get('work_experience', [])
+        current_role = work_experience[0] if work_experience else {}
+        
+        actions = []
+        
+        def add_fill(labels, value):
+            if not value:
+                return
+            label_list = [labels] if isinstance(labels, str) else labels
+            actions.append((label_list, str(value)))
+        
+        add_fill(["First Name", "Given Name"], personal.get('first_name'))
+        add_fill(["Last Name", "Family Name", "Surname"], personal.get('last_name'))
+        add_fill(["Full Name", "Name"], personal.get('full_name') or f"{personal.get('first_name', '')} {personal.get('last_name', '')}".strip())
+        add_fill(["Email", "Email Address"], personal.get('email'))
+        add_fill(["Phone", "Phone Number", "Mobile"], personal.get('phone'))
+        add_fill(["Street", "Street Address", "Address", "Address Line 1"], address.get('street'))
+        add_fill(["City"], address.get('city'))
+        add_fill(["State", "Province", "State/Province"], address.get('state'))
+        add_fill(["ZIP", "Zip Code", "Postal Code", "Postcode"], address.get('zip_code'))
+        add_fill(["Country"], address.get('country'))
+        add_fill(["Location", "Current Location"], f"{address.get('city', '')}, {address.get('state', '')}".strip(", "))
+        add_fill(["LinkedIn", "LinkedIn Profile"], links.get('linkedin'))
+        add_fill(["GitHub", "Github"], links.get('github'))
+        add_fill(["Portfolio", "Website", "Personal Website", "URL"], links.get('portfolio') or links.get('personal_website'))
+        add_fill(["Current Company", "Current Employer", "Company"], current_role.get('company'))
+        add_fill(["Current Title", "Job Title", "Role"], current_role.get('title'))
+        add_fill(["Salary Expectation", "Expected Salary", "Compensation Expectation"], prefs.get('salary_expectation'))
+        add_fill(["Notice Period", "Availability", "Available Start Date"], prefs.get('notice_period') or prefs.get('available_start_date'))
+        if self.cover_letter_text:
+            add_fill(["Cover Letter", "Cover letter text"], self.cover_letter_text)
+        
+        filled = 0
+        for labels, value in actions:
+            for label in labels:
+                action = {
+                    'type': 'fill',
+                    'target_label': label,
+                    'target_type': 'input',
+                    'value': value,
+                    'confidence': 0.95
+                }
+                if self.form_controller.execute(action):
+                    filled += 1
+                    self.action_history.append({
+                        'step': 0,
+                        'type': 'prefill',
+                        'target': label,
+                        'success': True
+                    })
+                    break
+        if filled:
+            console.print(f"[dim]Prefilled {filled} common fields without GPT[/dim]")
+        return filled
+    
+    def _quick_file_uploads(self) -> int:
+        """
+        Try attaching resume/cover letter immediately to avoid extra GPT steps.
+        
+        Returns:
+            Number of successful uploads
+        """
+        uploads = 0
+        try:
+            if self.resume_path and self.resume_path.exists():
+                if self.form_controller.file_handler.upload_resume({'target_label': 'Resume'}):
+                    uploads += 1
+            if self.cover_letter_path and self.cover_letter_path.exists():
+                if self.form_controller.file_handler.upload_cover_letter({'target_label': 'Cover Letter'}):
+                    uploads += 1
+        except Exception as e:
+            console.print(f"[dim]Quick upload attempt skipped: {e}[/dim]")
+        return uploads
+    
     def _capture_screenshot(self, page: Page, filename: str = None) -> str:
         """
         Capture and optimize a screenshot of the current page.
@@ -910,6 +1016,9 @@ class VisionAgent:
                 page.goto(url, wait_until='networkidle', timeout=30000)
                 time.sleep(2)  # Wait for dynamic content
                 
+                # Close cookie/privacy popups that might hide the form
+                self._dismiss_popups(page)
+                
                 # Initialize FormController for action execution
                 self.form_controller = FormController(
                     page=page,
@@ -917,6 +1026,13 @@ class VisionAgent:
                     cover_letter_path=self.cover_letter_path,
                     cover_letter_text=self.cover_letter_text
                 )
+                
+                # Try deterministic autofill to reduce GPT calls
+                prefilled = self._prefill_obvious_fields(page)
+                uploads = self._quick_file_uploads()
+                if prefilled or uploads:
+                    console.print(f"[dim]Autofill kickstart: fields={prefilled}, uploads={uploads}[/dim]")
+                time.sleep(0.5)
                 
                 step = 0
                 while step < self.max_steps:
@@ -1005,7 +1121,7 @@ class VisionAgent:
             finally:
                 # Cleanup
                 cleanup_screenshots(self.screenshots_dir, keep_last=10)
-                input("\nPress Enter to close browser...")
+                console.print("[dim]Closing browser...[/dim]")
                 browser.close()
     
     def generate_answer(self, question: str) -> str:

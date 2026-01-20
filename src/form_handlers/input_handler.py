@@ -1,5 +1,5 @@
 """
-Input Handler - Handles text inputs and textareas.
+Input Handler - Handles text inputs, textareas, and autocomplete suggestions.
 """
 
 import time
@@ -15,8 +15,8 @@ class InputHandler(BaseHandler):
     Supports:
     - Standard text inputs
     - Textareas (cover letters, descriptions)
+    - Autocomplete/Suggestion dropdowns (e.g., Location, Company)
     - Email, phone, URL inputs
-    - Autofill detection and clearing
     """
     
     def __init__(self, page: Page, cover_letter_text: Optional[str] = None):
@@ -32,7 +32,7 @@ class InputHandler(BaseHandler):
     
     def fill(self, action: dict) -> bool:
         """
-        Fill a text input or textarea.
+        Fill a text input or textarea and handle suggestions if they appear.
         
         Args:
             action: Action dict with target_label and value
@@ -66,12 +66,12 @@ class InputHandler(BaseHandler):
             self.page.locator(f'input[id*="{target_lower}"]'),
             # Strategy 6: Aria-label
             self.page.locator(f'[aria-label*="{target_label}" i]'),
-            self.page.locator(f'textarea[aria-label*="{target_label}" i]'),
-            # Strategy 7: Adjacent to label
+            # Strategy 7: Adjacent to label (Robust for modern frameworks)
             self.page.locator(f'label:has-text("{target_label}") + input'),
             self.page.locator(f'label:has-text("{target_label}") + textarea'),
             self.page.locator(f'label:has-text("{target_label}") ~ input'),
-            self.page.locator(f'label:has-text("{target_label}") ~ textarea'),
+            self.page.locator(f'label:has-text("{target_label}") ~ div input'),
+            self.page.locator(f'div:has-text("{target_label}") input'),
         ]
         
         # Add cover-letter specific locators
@@ -84,52 +84,102 @@ class InputHandler(BaseHandler):
             ])
         
         # Try each locator
-        def fill_action(element):
+        filled = False
+        for locator in locators:
             try:
-                element.fill(value)
-                return True
+                if locator.count() > 0:
+                    scroll_element_into_view(self.page, locator)
+                    if locator.first.is_visible():
+                        # Clear and fill
+                        locator.first.fill("")
+                        time.sleep(0.1)
+                        locator.first.fill(value)
+                        filled = True
+                        break
             except Exception:
-                return False
-        
-        if self._try_locators(locators, fill_action):
-            display_value = value[:40] + "..." if len(value) > 40 else value
-            self._log_success("Filled", target_label, f"value={display_value}")
-            return True
-        
-        # Last resort for cover letter: try any visible textarea
-        if self._is_cover_letter_field(target_label):
+                continue
+
+        # Last resort for cover letter
+        if not filled and self._is_cover_letter_field(target_label):
             try:
                 textareas = self.page.locator('textarea:visible')
                 if textareas.count() > 0:
                     textareas.first.fill(value)
                     self._log_success("Filled", "textarea", "cover letter fallback")
-                    return True
+                    filled = True
             except Exception:
                 pass
         
         # JavaScript fallback
-        if self._fill_with_js(target_label, value):
-            return True
+        if not filled:
+            if self._fill_with_js(target_label, value):
+                filled = True
         
+        if filled:
+            display_value = value[:40] + "..." if len(value) > 40 else value
+            self._log_success("Filled", target_label, f"value={display_value}")
+            
+            # Check for autocomplete suggestions (NEW)
+            self._check_for_suggestions(value)
+            return True
+            
         self._log_warning(f"Could not find input: {target_label}")
         return False
     
+    def _check_for_suggestions(self, value: str):
+        """
+        Check if typing triggered a suggestion dropdown and select the matching option.
+        """
+        # Wait briefly for network/animation
+        time.sleep(0.8)
+        
+        # Common selectors for suggestion containers
+        suggestion_selectors = [
+            '[role="listbox"]', 
+            '.pac-container',  # Google Maps
+            '.ui-menu',        # jQuery UI
+            '.dropdown-menu',  # Bootstrap
+            'div[class*="suggestions"]',
+            'div[class*="results"]',
+            'div[class*="option-list"]',
+            'ul[class*="list"]'
+        ]
+        
+        # Look for any visible suggestion box
+        for selector in suggestion_selectors:
+            try:
+                box = self.page.locator(f'{selector}:visible').first
+                if box.count() > 0:
+                    # 1. Try exact match in the list
+                    option = box.locator(f'text="{value}"').first
+                    if option.count() > 0 and option.is_visible():
+                        option.click(force=True)
+                        self._log_success("Selected suggestion", value, "exact match")
+                        return
+
+                    # 2. Try partial match
+                    option = box.locator(f'text={value}').first
+                    if option.count() > 0 and option.is_visible():
+                        option.click(force=True)
+                        self._log_success("Selected suggestion", value, "partial match")
+                        return
+                    
+                    # 3. Fallback: Click the first option (often "Best Match")
+                    first_option = box.locator('[role="option"], li, .pac-item').first
+                    if first_option.count() > 0 and first_option.is_visible():
+                        first_option.click(force=True)
+                        self._log_debug(f"Clicked first suggestion for {value}")
+                        return
+            except Exception:
+                pass
+
     def _is_cover_letter_field(self, label: str) -> bool:
         """Check if the field is for cover letter."""
         label_lower = label.lower()
         return 'cover' in label_lower and 'letter' in label_lower
     
     def _fill_with_js(self, target_label: str, value: str) -> bool:
-        """
-        Try to fill using JavaScript as fallback.
-        
-        Args:
-            target_label: Field label
-            value: Value to fill
-            
-        Returns:
-            True if successful
-        """
+        """Try to fill using JavaScript as fallback."""
         try:
             js_result = self.page.evaluate(f'''
                 () => {{

@@ -48,6 +48,9 @@ RULES:
 - For resume file uploads: use "upload_resume" action
 - For cover letter file uploads: use "upload_cover_letter" action (NOT fill)
 - If the cover letter field says "Attach" or "Upload" it needs upload_cover_letter, not fill
+- If a field already has a value, skip it and move to the next required item
+- Avoid repeating an action that already succeeded; look for the next unfilled requirement
+- If the form looks complete, prioritize clicking Next/Continue/Submit over refilling fields
 - If you see "Submit" or "Apply" and all fields are filled: click it
 - If you see a success/confirmation message: set status to "completed"
 - If stuck in a loop or error state: set status to "error"
@@ -104,6 +107,8 @@ RULES:
 - For radio button questions: use "radio" action with the option text as value
 - For cover letter file uploads: use "upload_cover_letter" action
 - For unmarked areas that need scrolling, use scroll action
+- Skip elements that already have a value/selection and move to the next required item
+- Avoid repeating an action that already worked; progress toward Next/Continue/Submit when the form appears complete
 
 OUTPUT FORMAT (strict JSON):
 {{

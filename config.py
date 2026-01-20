@@ -28,7 +28,7 @@ class Config:
     
     # Automation limits
     MAX_STEPS = int(os.getenv("MAX_STEPS", "30"))
-    ACTION_DELAY = float(os.getenv("ACTION_DELAY", "2.0"))
+    ACTION_DELAY = float(os.getenv("ACTION_DELAY", "1.0"))
     
     # Image processing (lower resolution = lower token cost)
     SCREENSHOT_WIDTH = int(os.getenv("SCREENSHOT_WIDTH", "1024"))

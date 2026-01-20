@@ -75,16 +75,22 @@ def print_banner():
 )
 @click.option(
     '--delay',
-    default=2.0,
+    default=1.0,
     type=float,
-    help='Delay between actions in seconds (default: 2.0)'
+    help='Delay between actions in seconds (default: 1.0)'
 )
 @click.option(
     '--cover-letter', '-c',
     default=None,
     help='Path to cover letter text file (default: user_data/coverletter.txt)'
 )
-def main(url: str, user_data: str, resume: str, som: bool, headless: bool, max_steps: int, delay: float, cover_letter: str):
+@click.option(
+    '--yes', '-y',
+    is_flag=True,
+    default=False,
+    help='Skip the start confirmation prompt (run fully unattended)'
+)
+def main(url: str, user_data: str, resume: str, som: bool, headless: bool, max_steps: int, delay: float, cover_letter: str, yes: bool):
     """
     Automatically fill job applications using AI vision.
     
@@ -139,7 +145,7 @@ def main(url: str, user_data: str, resume: str, som: bool, headless: bool, max_s
     
     # Confirm before starting
     console.print("\n[bold yellow]Ready to start automation.[/bold yellow]")
-    if not click.confirm("Proceed?", default=True):
+    if not yes and not click.confirm("Proceed?", default=True):
         console.print("[dim]Cancelled by user[/dim]")
         sys.exit(0)
     
