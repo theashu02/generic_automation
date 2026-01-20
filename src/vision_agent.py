@@ -1,6 +1,6 @@
 """
 VisionAgent - The core automation agent.
-Uses GPT-4o vision to analyze web pages and Playwright to interact with them.
+Uses GPT-4o-mini vision to analyze web pages and Playwright to interact with them.
 Implements the Look-Think-Act loop for intelligent form filling.
 """
 
@@ -25,6 +25,8 @@ from .utils import (
     get_timestamp,
     cleanup_screenshots
 )
+from .token_tracker import TokenTracker
+from .form_handlers import FormController
 
 console = Console()
 
@@ -106,6 +108,12 @@ class VisionAgent:
         
         # Initialize OpenAI client
         self.client = OpenAI(api_key=api_key)
+        
+        # Initialize token tracker for cost monitoring
+        self.token_tracker = TokenTracker(model="gpt-4o-mini")
+        
+        # Form controller (initialized when page is available)
+        self.form_controller = None
         
         # Track action history to detect loops
         self.action_history = []
@@ -196,13 +204,14 @@ class VisionAgent:
         with open(image_path, "rb") as f:
             return base64.b64encode(f.read()).decode('utf-8')
     
-    def _analyze_page(self, screenshot_path: str, element_marker: Optional[ElementMarker] = None) -> dict:
+    def _analyze_page(self, screenshot_path: str, element_marker: Optional[ElementMarker] = None, step: int = 0) -> dict:
         """
-        Send screenshot to GPT-4o for analysis.
+        Send screenshot to GPT-4o-mini for analysis.
         
         Args:
             screenshot_path: Path to current screenshot
             element_marker: Optional ElementMarker if SOM is enabled
+            step: Current step number for token tracking
             
         Returns:
             Parsed JSON response with action recommendation
@@ -217,14 +226,14 @@ class VisionAgent:
         
         with Progress(
             SpinnerColumn(),
-            TextColumn("[bold blue]Analyzing page with GPT-4o...[/bold blue]"),
+            TextColumn("[bold blue]Analyzing page with GPT-4o-mini...[/bold blue]"),
             console=console,
             transient=True
         ) as progress:
             progress.add_task("Analyzing", total=None)
             
             response = self.client.chat.completions.create(
-                model="gpt-4o",
+                model="gpt-4o-mini",
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {
@@ -245,6 +254,9 @@ class VisionAgent:
                 max_tokens=1000
             )
         
+        # Record token usage
+        self.token_tracker.record(response, step=step, action_type="analyze")
+        
         response_text = response.choices[0].message.content
         result = extract_json_from_response(response_text)
         
@@ -256,7 +268,7 @@ class VisionAgent:
     
     def _execute_action(self, page: Page, command: dict, element_marker: Optional[ElementMarker] = None) -> bool:
         """
-        Execute an action on the page based on GPT-4o's recommendation.
+        Execute an action on the page based on GPT-4o-mini's recommendation.
         
         Args:
             page: Playwright page object
@@ -281,16 +293,18 @@ class VisionAgent:
                 elif action_type in ('click', 'check', 'select'):
                     success = element_marker.click_element(element_id)
                 else:
-                    success = self._execute_standard_action(page, action)
+                    # Use FormController for other actions
+                    success = self.form_controller.execute(action)
                 
                 return success
             
-            # Standard Playwright-based execution
-            return self._execute_standard_action(page, action)
+            # Use FormController for standard action execution
+            return self.form_controller.execute(action)
             
         except Exception as e:
             console.print(f"[red]✗ Action failed: {e}[/red]")
             return False
+
     
     def _execute_standard_action(self, page: Page, action: dict) -> bool:
         """
@@ -896,6 +910,14 @@ class VisionAgent:
                 page.goto(url, wait_until='networkidle', timeout=30000)
                 time.sleep(2)  # Wait for dynamic content
                 
+                # Initialize FormController for action execution
+                self.form_controller = FormController(
+                    page=page,
+                    resume_path=self.resume_path,
+                    cover_letter_path=self.cover_letter_path,
+                    cover_letter_text=self.cover_letter_text
+                )
+                
                 step = 0
                 while step < self.max_steps:
                     step += 1
@@ -911,8 +933,8 @@ class VisionAgent:
                     # Remove markers before analysis if we want clean screenshots
                     # (keeping them for now as they help AI identify elements)
                     
-                    # THINK: Analyze with GPT-4o
-                    decision = self._analyze_page(screenshot_path, element_marker)
+                    # THINK: Analyze with GPT-4o-mini
+                    decision = self._analyze_page(screenshot_path, element_marker, step=step)
                     
                     # Show status
                     print_status_panel(
@@ -930,6 +952,8 @@ class VisionAgent:
                         console.print("\n[bold green]✅ Application submitted successfully![/bold green]")
                         # Capture final screenshot as proof
                         self._capture_screenshot(page, "final_confirmation.jpg")
+                        # Print token usage summary
+                        self.token_tracker.print_summary()
                         return True
                     
                     # Check for error
@@ -966,12 +990,16 @@ class VisionAgent:
                     time.sleep(self.action_delay)
                 
                 console.print(f"\n[bold yellow]⚠ Reached maximum steps ({self.max_steps})[/bold yellow]")
+                # Print token usage even on timeout
+                self.token_tracker.print_summary()
                 return False
                 
             except Exception as e:
                 console.print(f"\n[bold red]❌ Fatal error: {e}[/bold red]")
                 import traceback
                 traceback.print_exc()
+                # Print token usage even on error
+                self.token_tracker.print_summary()
                 return False
             
             finally:

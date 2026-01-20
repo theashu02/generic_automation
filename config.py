@@ -21,7 +21,7 @@ class Config:
     
     # OpenAI (strip whitespace to avoid header issues)
     OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-    OPENAI_MODEL = "gpt-4o"
+    OPENAI_MODEL = "gpt-4o-mini"  # Cost-effective vision model
     
     # Browser settings
     HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
